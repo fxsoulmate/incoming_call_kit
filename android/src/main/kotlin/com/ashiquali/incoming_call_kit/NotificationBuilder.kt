@@ -137,6 +137,25 @@ object NotificationBuilder {
             )
         }
 
+        // User cleared the notification (shade swipe / clear-all / OEM banner dismiss).
+        // Heads-up "swipe up" only snoozes and does not fire this — ringtone would keep
+        // playing without a deleteIntent whenever the notification is actually removed.
+        val dismissIntent = Intent(context, IncomingCallService::class.java).apply {
+            action = Constants.ACTION_DISMISS
+            putExtra(Constants.EXTRA_CALL_ID, callId)
+        }
+        val dismissPI = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(
+                context, requestBase + 3500, dismissIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        } else {
+            PendingIntent.getService(
+                context, requestBase + 3500, dismissIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
         val person = Person.Builder()
             .setName(callerName)
             .setImportant(true)
@@ -149,6 +168,7 @@ object NotificationBuilder {
             .setLargeIcon(callerIcon)
             .setContentIntent(fullScreenPI)
             .setFullScreenIntent(fullScreenPI, true)
+            .setDeleteIntent(dismissPI)
             .setOngoing(true)
             .setAutoCancel(false)
             .setPriority(NotificationCompat.PRIORITY_MAX)
