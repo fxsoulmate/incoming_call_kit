@@ -1,5 +1,6 @@
 package com.ashiquali.incoming_call_kit
 
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -22,6 +23,7 @@ class IncomingCallService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private val timeoutRunnables = mutableMapOf<String, Runnable>()
+    private val presenceWatchRunnables = mutableMapOf<String, Runnable>()
     private val activeCallIds = mutableSetOf<String>()
     private val callTimestamps = mutableMapOf<String, Long>()
 
@@ -144,6 +146,7 @@ class IncomingCallService : Service() {
 
         activeCallIds.add(callId)
         callTimestamps[callId] = System.currentTimeMillis()
+        startNotificationPresenceWatch(callId)
 
         // Download real avatar in background and update the same FGS notification
         val avatarUrl = config["avatar"] as? String
@@ -290,15 +293,46 @@ class IncomingCallService : Service() {
         ringtoneManager.stopRinging()
         releaseWakeLock()
 
-        // Cancel timeout
+        // Cancel timeout + presence watch
         timeoutRunnables.remove(callId)?.let { timeoutHandler.removeCallbacks(it) }
+        presenceWatchRunnables.remove(callId)?.let { timeoutHandler.removeCallbacks(it) }
 
-        // Cancel notifications
-        val notifId = NotificationBuilder.getNotificationId(callId)
-        NotificationManagerCompat.from(this).cancel(notifId)
+        // Cancel notifications (FGS id is the one actually shown for incoming)
+        val nm = NotificationManagerCompat.from(this)
+        nm.cancel(Constants.FOREGROUND_SERVICE_NOTIFICATION_ID)
+        nm.cancel(NotificationBuilder.getNotificationId(callId))
 
         activeCallIds.remove(callId)
         callTimestamps.remove(callId)
+    }
+
+    /**
+     * If the user clears/swipes away the incoming notification (including OEM banner
+     * dismiss that removes it), stop ringing even when deleteIntent is not delivered.
+     */
+    private fun startNotificationPresenceWatch(callId: String) {
+        presenceWatchRunnables.remove(callId)?.let { timeoutHandler.removeCallbacks(it) }
+        val watch = object : Runnable {
+            override fun run() {
+                if (!activeCallIds.contains(callId)) return
+                val posted = try {
+                    getSystemService(NotificationManager::class.java)
+                        ?.activeNotifications
+                        ?.any { it.id == Constants.FOREGROUND_SERVICE_NOTIFICATION_ID }
+                        ?: true
+                } catch (_: Exception) {
+                    true
+                }
+                if (!posted) {
+                    Log.d(TAG, "Incoming notification removed while ringing — dismissing callId=$callId")
+                    handleDismiss(Intent().putExtra(Constants.EXTRA_CALL_ID, callId))
+                    return
+                }
+                timeoutHandler.postDelayed(this, 400L)
+            }
+        }
+        presenceWatchRunnables[callId] = watch
+        timeoutHandler.postDelayed(watch, 400L)
     }
 
     private fun emitEvent(action: String, callId: String) {

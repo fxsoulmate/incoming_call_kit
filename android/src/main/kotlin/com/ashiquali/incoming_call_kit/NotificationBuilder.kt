@@ -92,14 +92,12 @@ object NotificationBuilder {
         createIncomingCallChannel(context, androidConfig)
 
         val requestBase = (callId.hashCode() and 0x7FFFFFFF) % 10000
-        // Null/blank labels hide the corresponding notification action.
-        val acceptLabel = textAccept?.trim().orEmpty()
-        val declineLabel = textDecline?.trim().orEmpty()
-        val showAccept = acceptLabel.isNotEmpty()
-        val showDecline = declineLabel.isNotEmpty()
-        // CallStyle forces system "Answer"/"Decline" and ignores custom labels.
-        val useCallStyle = showAccept && showDecline &&
-            acceptLabel == "Accept" && declineLabel == "Decline"
+        // Always keep Accept/Decline on the heads-up banner. Blank payload labels
+        // used to hide both actions, so the banner could not answer/reject.
+        val acceptLabel = textAccept?.trim().takeUnless { it.isNullOrEmpty() } ?: "Accept"
+        val declineLabel = textDecline?.trim().takeUnless { it.isNullOrEmpty() } ?: "Decline"
+        // CallStyle is the system incoming-call banner with Answer/Decline.
+        val useCallStyle = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
         // Full screen intent → IncomingCallActivity
         val fullScreenIntent = Intent(context, IncomingCallActivity::class.java).apply {
@@ -169,30 +167,24 @@ object NotificationBuilder {
             .setContentIntent(fullScreenPI)
             .setFullScreenIntent(fullScreenPI, true)
             .setDeleteIntent(dismissPI)
-            .setOngoing(true)
-            .setAutoCancel(false)
+            // Must be dismissible: ongoing heads-up "swipe up" only snoozes the peek
+            // while MediaPlayer keeps ringing. Allow real dismiss so deleteIntent runs.
+            .setOngoing(false)
+            .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && useCallStyle) {
-            // Native call treatment when both default system labels are present.
+        if (useCallStyle) {
+            // Native call banner with Answer / Decline on the heads-up notification.
             builder.setStyle(
                 NotificationCompat.CallStyle.forIncomingCall(person, declinePI, answerPI)
             )
         } else {
-            // Heads-up actions use the same accept/decline labels as the full-screen UI.
-            // Omit an action entirely when its label is null/blank.
-            if (showAccept) {
-                builder.addAction(
-                    android.R.drawable.ic_menu_call, acceptLabel, answerPI
-                )
-            }
-            if (showDecline) {
-                builder.addAction(
-                    android.R.drawable.ic_menu_close_clear_cancel, declineLabel, declinePI
-                )
-            }
+            builder.addAction(android.R.drawable.ic_menu_call, acceptLabel, answerPI)
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel, declineLabel, declinePI
+            )
             builder.addPerson(person)
         }
 
