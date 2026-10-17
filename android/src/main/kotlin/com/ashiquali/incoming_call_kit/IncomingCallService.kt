@@ -147,6 +147,7 @@ class IncomingCallService : Service() {
         activeCallIds.add(callId)
         callTimestamps[callId] = System.currentTimeMillis()
         startNotificationPresenceWatch(callId)
+        launchIncomingActivity(callId)
 
         // Download real avatar in background and update the same FGS notification
         val avatarUrl = config["avatar"] as? String
@@ -333,6 +334,28 @@ class IncomingCallService : Service() {
         }
         presenceWatchRunnables[callId] = watch
         timeoutHandler.postDelayed(watch, 400L)
+    }
+
+    /** Always open the full-screen UI so a queued next call is not only a heads-up banner. */
+    private fun launchIncomingActivity(callId: String) {
+        val launch = Runnable {
+            if (!activeCallIds.contains(callId)) return@Runnable
+            val activityIntent = Intent(this, IncomingCallActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(Constants.EXTRA_CALL_ID, callId)
+            }
+            try {
+                startActivity(activityIntent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch IncomingCallActivity for callId=$callId", e)
+            }
+        }
+        if (IncomingCallActivity.isActivityAlive && IncomingCallActivity.activeCallId != callId) {
+            IncomingCallActivity.finishActivity?.invoke()
+            timeoutHandler.postDelayed(launch, 350L)
+        } else {
+            timeoutHandler.post(launch)
+        }
     }
 
     private fun emitEvent(action: String, callId: String) {

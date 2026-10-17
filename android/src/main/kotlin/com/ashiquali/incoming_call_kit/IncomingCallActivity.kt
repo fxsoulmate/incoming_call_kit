@@ -86,16 +86,26 @@ class IncomingCallActivity : AppCompatActivity() {
         callId = intent?.getStringExtra(Constants.EXTRA_CALL_ID) ?: run { finish(); return }
         val id = callId ?: run { finish(); return }
 
-        // Dedup concurrent FullScreenIntent launches (same or rapid re-post).
+        // Dedup same-call re-posts only. A different queued call must be allowed to
+        // take over — otherwise the next call is stuck as a heads-up with the wrong UI.
         synchronized(activityLock) {
-            if (isActivityAlive) {
+            if (isActivityAlive && activeCallId == id) {
                 finish()
                 return
             }
-            isActivityAlive = true
-            activeCallId = id
-            lastAliveTimestamp = System.currentTimeMillis()
-            finishActivity = { finish() }
+            if (isActivityAlive && activeCallId != null && activeCallId != id) {
+                val previousFinish = finishActivity
+                activeCallId = id
+                lastAliveTimestamp = System.currentTimeMillis()
+                finishActivity = { finish() }
+                isActivityAlive = true
+                previousFinish?.invoke()
+            } else {
+                isActivityAlive = true
+                activeCallId = id
+                lastAliveTimestamp = System.currentTimeMillis()
+                finishActivity = { finish() }
+            }
         }
 
         // MIUI overlay fallback for lock screen
@@ -110,13 +120,40 @@ class IncomingCallActivity : AppCompatActivity() {
         val config = CallKitConfigStore.load(this, id) ?: run { finish(); return }
 
         setContentView(R.layout.activity_incoming_call)
+        bindIncomingCallUi(config)
+        setupDismissListener()
+    }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val newId = intent.getStringExtra(Constants.EXTRA_CALL_ID) ?: return
+        if (newId == callId) return
+
+        Log.d(TAG, "Queued call taking over UI: $callId -> $newId")
+        callHandled = false
+        callId = newId
+        synchronized(activityLock) {
+            isActivityAlive = true
+            activeCallId = newId
+            lastAliveTimestamp = System.currentTimeMillis()
+            finishActivity = { finish() }
+        }
+
+        val config = CallKitConfigStore.load(this, newId) ?: run { finish(); return }
+        if (findViewById<View?>(R.id.accept_button_container) == null) {
+            setContentView(R.layout.activity_incoming_call)
+            setupDismissListener()
+        }
+        bindIncomingCallUi(config)
+    }
+
+    private fun bindIncomingCallUi(config: Map<String, Any?>) {
         applyBackground(config)
         applyAvatar(config)
         applyCallerInfo(config)
         applyButtons(config)
         setupSwipeGesture(config)
-        setupDismissListener()
     }
 
     private fun applyBackground(config: Map<String, Any?>) {
